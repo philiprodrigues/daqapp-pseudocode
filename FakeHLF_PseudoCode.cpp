@@ -52,7 +52,7 @@ FakeHLF_PseudoCode::init()
   TLOG(TLVL_ENTER_EXIT_METHODS) << get_name() << ": Entering init() method";
   try
   {
-    requestChannel_.reset(new dunedaq::appfwk::DAQSink<std::vector<uint8_t>>(get_config()["request_channel_name"].get<std::string>()));
+    requestChannel_.reset(new dunedaq::appfwk::DAQSink<TriggerRecordRequest>(get_config()["request_channel_name"].get<std::string>()));
   }
   catch (const ers::Issue& excpt)
   {
@@ -61,7 +61,7 @@ FakeHLF_PseudoCode::init()
 
   try
   {
-    dataSource_.reset(new dunedaq::appfwk::DAQSource<std::vector<uint8_t>>(get_config()["data_source_name"].get<std::string>()));
+    dataSource_.reset(new dunedaq::appfwk::DAQSource<TriggerRecord>(get_config()["data_source_name"].get<std::string>()));
   }
   catch (const ers::Issue& excpt)
   {
@@ -70,7 +70,7 @@ FakeHLF_PseudoCode::init()
 
   try
   {
-    resultSink_.reset(new dunedaq::appfwk::DAQSink<std::vector<uint8_t>>(get_config()["result_sink_name"].get<std::string>()));
+    resultSink_.reset(new dunedaq::appfwk::DAQSink<TriggerRecord>(get_config()["result_sink_name"].get<std::string>()));
   }
   catch (const ers::Issue& excpt)
   {
@@ -119,21 +119,10 @@ FakeHLF_PseudoCode::do_work(std::atomic<bool>& running_flag)
     trReq.setAcceptableTRTypes(bitmaskOrStructureOrList);
     trReq.setNumberOfRecordsToSend(TRsToRequestEachTime);
 
-    // ** Prepare the message to be sent to the Dispatcher
-    std::vector<uint8_t> trrBuff;
-#if A
-    // One model for serializing the message (I'm trying to illustrate using generated code)
-    TriggerRecordRequestSerializer::serialize(trReq, trrBuff);
-#elif B
-    // Would it be possible to have some sort of general-purposer serializer that
-    // can handle different type of messages?
-    serializationWorker_.serialize(trReq, trrBuff);
-#endif
-
     // *** Send the message to the Dispatcher
     try
     {
-      requestChannel_->push(trrBuff, queueTimeout_);
+      requestChannel_->push(trReq, queueTimeout_);
     }
     catch (const dunedaq::appfwk::QueueTimeoutExpired& excpt)
     {
@@ -154,17 +143,15 @@ FakeHLF_PseudoCode::do_work(std::atomic<bool>& running_flag)
     int trigRecLeftToReceive = TRsToRequestEachTime;
     while (trigRecLeftToReceive > 0 && running_flag.load())
     {
-      // allocate a buffer to receive the Trigger Record into
-      std::vector<uint8_t> receiveBuff;
-      receiveBuff.resize(MAX_TR_SIZE);
-
+      TriggerRecord trigRec;
       bool trigRecWasSuccessfullyReceived = false;
       while (!trigRecWasSuccessfullyReceived && running_flag.load())
       {
         TLOG(TLVL_LIST_VALIDATION) << get_name() << ": Receiving the next Trigger Record";
+        
         try
         {
-          dataSource_->pop(receiveBuff, queueTimeout_);
+          dataSource_->pop(trigRec, queueTimeout_);
           trigRecWasSuccessfullyReceived = true;
           --trigRecLeftToReceive;
         }
@@ -184,17 +171,13 @@ FakeHLF_PseudoCode::do_work(std::atomic<bool>& running_flag)
       {
         // process the data in some way.
         // For now, I'll just copy the data from the input to the output.
-        std::vector<uint8_t> sendBuff;
-        sendBuff.resize(MAX_TR_SIZE);
-        std::copy(receiveBuff.begin(), receiveBuff.end(), sendBuff.start());
-
         bool trigRecWasSuccessfullySent = false;
         while (!trigRecWasSuccessfullySent && running_flag.load())
         {
           TLOG(TLVL_LIST_VALIDATION) << get_name() << ": Sending the processed Trigger Record back to the Dispatcher";
           try
           {
-            resultSink_->push(sendBuff, queueTimeout_);
+            resultSink_->push(trigRec, queueTimeout_);
             trigRecWasSuccessfullySent = true;
           }
           catch (const dunedaq::appfwk::QueueTimeoutExpired& excpt)
@@ -213,8 +196,7 @@ FakeHLF_PseudoCode::do_work(std::atomic<bool>& running_flag)
   oss_summ << ": Exiting do_work() method, sent " << requestCount << " requests for data, each of them "
 	   << "requesting " << TRsPerRequest << " trigger records. Received " << receivedCount
            << " Trigger Records, successfully processed " << processedCount << " of them, and "
-           << "successfully sent the results for " << sentCount << of them back to the Dispatcher.";
-           << " lists and successfully sent " << sentCount << ". ";dd
+           << "successfully sent the results for " << sentCount << "of them back to the Dispatcher."
   ers::info(ProgressUpdate(ERS_HERE, get_name(), oss_summ.str()));
   TLOG(TLVL_ENTER_EXIT_METHODS) << get_name() << ": Exiting do_work() method";
 }
